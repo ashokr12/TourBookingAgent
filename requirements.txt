@@ -1,0 +1,12 @@
+streamlit
+langgraph
+langchain-community
+langchain-openai
+langsmith
+langchain
+supabase
+crawl4AI
+pydantic
+tabulate
+playwright
+openpyxl
