@@ -20,6 +20,7 @@ from langgraph.graph import START, MessagesState, StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain.tools import StructuredTool
+import streamlit as st
 
 load_dotenv()
 
@@ -294,32 +295,31 @@ class TourPackageAPI:
         #     print("-" * 80 + "\n")
 
 ########################################################
+class StateManager:
+    _current_state = None
+
+    @classmethod
+    def set_state(cls, state):
+        cls._current_state = state
+
+    @classmethod
+    def get_state(cls):
+        return cls._current_state
+
 def write_to_database(data):
-    """Write the customer details and booking information to the database
-    Args:
-        data: Dictionary containing customer details and booking information
-        Possible keys:
-        - Customer_name: Name of the customer
-        - Package_name: Name of the package
-        - Package_id: ID of the package
-        - Trip_Start_date: Start date of the trip
-        - Origin_city: Origin city of the trip
-        - Tot_adults: Number of adults in the trip
-        - Tot_children: Number of children in the trip
-        - Hotel_bookings: Details of the hotel bookings (Hotel name, check in date, check out date)
-    """
+    """Write the customer details and booking information to the database"""
     # Wrap single dictionary in a list if it's not already a list
     if not isinstance(data, list):
         data = [data]
-        
     conn = sqlite3.connect("BookingInfo.db")
     cursor = conn.cursor()
-
     # Create table if it does not exist
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tour_packages (
             Cust_id INTEGER PRIMARY KEY AUTOINCREMENT,
             Customer_name TEXT,
+            Customer_email TEXT,
+            Customer_mobile TEXT,
             Package_name TEXT,
             Package_id TEXT,       
             Trip_Start_date TEXT,
@@ -330,22 +330,26 @@ def write_to_database(data):
         )
     ''')
 
+    current_state = StateManager.get_state()
+    
     for package in data:
-        # Convert hotel_bookings dictionary to JSON string
-        hotel_bookings_json = json.dumps(package['Hotel_bookings'])
+        # Convert hotel_bookings dictionary to JSON string if it exists
+        hotel_bookings_json = json.dumps(package.get('Hotel_bookings', {})) if package.get('Hotel_bookings') else None
         
         cursor.execute('''
             INSERT INTO tour_packages 
-            (Customer_name, Package_name, Package_id, Trip_Start_date, Origin_city, Tot_adults, Tot_children, Hotel_bookings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (Customer_name, Customer_email, Customer_mobile, Package_name, Package_id, Trip_Start_date, Origin_city, Tot_adults, Tot_children, Hotel_bookings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            package['Customer_name'],
+            current_state.get("user_name") if current_state else None,
+            current_state.get("user_email") if current_state else None,
+            current_state.get("user_mobile") if current_state else None,
             package['Package_name'],
             package['Package_id'],
             package['Trip_Start_date'],
             package['Origin_city'],
             package['Tot_adults'],
-            package['Tot_children'],
+            package.get('Tot_children', 0),
             hotel_bookings_json
         ))
 
@@ -384,9 +388,12 @@ prompt1 = ChatPromptTemplate.from_messages(
                       along with information like Hotel name, location and facilities, price and display the pictures. Ask the customer's choice for the hotel.
                     - When there are multiple cities included in the itinerary, do this for all the cities.
                     - Once all the hotels are finalized, inform that you will be proceeding with the booking and they will be receiving confirmation and payment links via email. 
-               - Once the tour package, and hotel bookings are confirmed, Share all these details (package name, cities included, duration, start date of trip, price per person,
+               - Once the tour package, and hotel bookings are confirmed, Share all these details (package name, cities included, duration, start date of trip, Total cost of trip 
+               (Calculate total cost of the trip as: Tour package Price per person * (no.of adults + no.of children) + (Hotel Accommodation cost per Night * No.of Nights) 
+               for each hotel [if hotel accommodation had been booked seprately]) 
                  list of the all the hotels selected by customer along with checkin and checkout dates) in a summary message
-               - Once the chat is complete, call the write_to_database tool with the customer details and booking information to update the database without fail!
+               - Once the chat is complete, call the write_to_database tool with the customer details and booking information to update the database without fail! Do not include 
+                 Name, Customer_email and Customer_mobile in the arguments.
                - If the questions asked are not related to the travel plans, politely inform them that you are not able to answer that question.
             ''',
         ),
@@ -401,7 +408,7 @@ class SearchPackagesParams(BaseModel):
     destination_type: Optional[str] = Field(None, description="Type of destination (Beach/Island, Wildlife/Nature, etc.)")
 
 class WriteToDatabaseParams(BaseModel):
-    Customer_name: str = Field(..., description="Name of the Customer")
+    #Customer_name: str = Field(..., description="Name of the Customer")
     Package_name: str = Field(..., description="Name of the Package")
     Package_id: str = Field(..., description="Package ID")
     Trip_Start_date: str = Field(..., description="Start date of the trip")
@@ -414,11 +421,14 @@ class WriteToDatabaseParams(BaseModel):
 
 model = ChatOpenAI(model = 'gpt-4o-mini')
 
-TripPlan = StateGraph(state_schema=MessagesState)
-
-class State(MessagesState):
+class State(MessagesState):    # First define State
     trip_details: Optional[Dict] = None
+    user_email: Optional[str] = None
+    user_mobile: Optional[str] = None
+    user_name: Optional[str] = None
 
+
+TripPlan = StateGraph(State)   # Then use State
 
 hotel_api = HotelSearchAPI(api_key=os.getenv("RAPIDAPI_KEY"))
 
@@ -439,7 +449,7 @@ search_packages_tool = StructuredTool.from_function(
 DB_update_tool = StructuredTool.from_function(
     name="write_to_database",
     description="Write the customer details and booking information to the database",
-    func=lambda **params: write_to_database(params),
+    func=lambda **params: write_to_database({**params}),
     args_schema=WriteToDatabaseParams
 )
 
@@ -447,9 +457,17 @@ tools = [search_hotels_tool, search_packages_tool, DB_update_tool]  # Register t
 model_with_tools = model.bind_tools(tools, parallel_tool_calls=False)
 
 def call_model(state: State):
+    # Store the current state
+    StateManager.set_state(state)
+    
     model_with_message = prompt1.format_messages(messages=state["messages"])
     response = model_with_tools.invoke(model_with_message)
-    return {"messages": [response]}
+    
+    return {
+        "messages": [response],
+        "user_email": state.get("user_email"),
+        "user_mobile": state.get("user_mobile")
+    }
 
 TripPlan.add_node("model", call_model)
 TripPlan.add_node("tools", ToolNode(tools))
