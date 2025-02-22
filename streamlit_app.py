@@ -213,8 +213,11 @@ def main():
     # Title and description with custom styling
     st.markdown('<h1 class="title">✈️ Bling Destinations</h1>', unsafe_allow_html=True)
     st.markdown("""
-        <div style="text-align: center; padding: 0 20px; margin-bottom: 2rem; color: #ffffff; font-weight: bold; font-size: 18px;">
+        <div style="text-align: center; padding: 0 20px; margin-bottom: 1rem; color: #9daabd; font-weight: bold; font-size: 20px;">
             Your personal AI travel assistant. Get customized travel recommendations, itineraries, and answers to all your travel-related questions.
+        </div>
+                <div style="text-align: center; padding: 0 20px; margin-bottom: 2rem; color: #9daabd; font-weight: bold; font-size: 14px;">
+            We server all popular destinations across the world (Mauritius, Bali, Europe, Australia, South Africa, South Korea, Japan, Turkey, Egypt, etc.)
         </div>
     """, unsafe_allow_html=True)
     
