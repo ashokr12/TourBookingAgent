@@ -21,6 +21,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain.tools import StructuredTool
 import streamlit as st
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -307,54 +310,128 @@ class StateManager:
         return cls._current_state
 
 def write_to_database(data):
-    """Write the customer details and booking information to the database"""
+    """Write the customer details and booking information to the database and send confirmation email"""
     # Wrap single dictionary in a list if it's not already a list
     if not isinstance(data, list):
         data = [data]
-    conn = sqlite3.connect("BookingInfo.db")
-    cursor = conn.cursor()
-    # Create table if it does not exist
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS tour_packages (
-            Cust_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            Customer_name TEXT,
-            Customer_email TEXT,
-            Customer_mobile TEXT,
-            Package_name TEXT,
-            Package_id TEXT,       
-            Trip_Start_date TEXT,
-            Origin_city TEXT,
-            Tot_adults INTEGER,
-            Tot_children INTEGER,              
-            Hotel_bookings TEXT
-        )
-    ''')
-
-    current_state = StateManager.get_state()
     
-    for package in data:
-        # Convert hotel_bookings dictionary to JSON string if it exists
-        hotel_bookings_json = json.dumps(package.get('Hotel_bookings', {})) if package.get('Hotel_bookings') else None
-        
+    try:
+        # Database operations
+        conn = sqlite3.connect("BookingInfo.db")
+        cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO tour_packages 
-            (Customer_name, Customer_email, Customer_mobile, Package_name, Package_id, Trip_Start_date, Origin_city, Tot_adults, Tot_children, Hotel_bookings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            current_state.get("user_name") if current_state else None,
-            current_state.get("user_email") if current_state else None,
-            current_state.get("user_mobile") if current_state else None,
-            package['Package_name'],
-            package['Package_id'],
-            package['Trip_Start_date'],
-            package['Origin_city'],
-            package['Tot_adults'],
-            package.get('Tot_children', 0),
-            hotel_bookings_json
-        ))
+            CREATE TABLE IF NOT EXISTS tour_packages (
+                Cust_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Customer_name TEXT,
+                Customer_email TEXT,
+                Customer_mobile TEXT,
+                Package_name TEXT,
+                Package_id TEXT,       
+                Trip_Start_date TEXT,
+                Origin_city TEXT,
+                Tot_adults INTEGER,
+                Tot_children INTEGER,
+                Tot_cost TEXT,
+                Hotel_bookings TEXT
+            )
+        ''')
 
-    conn.commit()
-    conn.close()
+        current_state = StateManager.get_state()
+        
+        # Send email for each package booking
+        sender_email = os.getenv("SMTP_EMAIL")
+        sender_password = os.getenv("SMTP_PASSWORD")
+        
+        if current_state and current_state.get("user_email"):
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = sender_email
+                msg['To'] = current_state.get("user_email")
+                msg['Subject'] = "Your BlingDestinations Tour Package Confirmation"
+                
+                email_body = f"""
+                Dear {current_state.get('user_name', 'Valued Customer')},
+                
+                Thank you for booking with BlingDestinations! Here are your trip details:
+                
+                BOOKING DETAILS:
+                """
+                for package in data:
+                    # Convert hotel_bookings dictionary to JSON string if it exists
+                    print("Data: ", package)
+                    hotel_bookings_json = json.dumps(package.get('Hotel_bookings', {})) if package.get('Hotel_bookings') else None
+                    
+                    # Database insert
+                    cursor.execute('''
+                        INSERT INTO tour_packages 
+                        (Customer_name, Customer_email, Customer_mobile, Package_name, Package_id, 
+                        Trip_Start_date, Origin_city, Tot_adults, Tot_children, Tot_cost, Hotel_bookings)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        current_state.get("user_name"),
+                        current_state.get("user_email"),
+                        current_state.get("user_mobile"),
+                        package['Package_name'],
+                        package['Package_id'],
+                        package['Trip_Start_date'],
+                        package['Origin_city'],
+                        package['Tot_adults'],
+                        package.get('Tot_children', 0),
+                        package['Tot_cost'],
+                        hotel_bookings_json
+                    ))
+                    
+                    # Add package details to email
+                    email_body += f"""
+                    TOUR PACKAGE:
+                    Package Name: {package['Package_name']}
+                    Package ID: {package['Package_id']}
+                    Trip Start Date: {package['Trip_Start_date']}
+                    Origin City: {package['Origin_city']}
+                    Number of Adults: {package['Tot_adults']}
+                    Number of Children: {package.get('Tot_children', 0)}
+                    Total Cost: {package['Tot_cost']}
+                    """
+                    
+                    # Add hotel booking details if any
+                    if hotel_bookings_json:
+                        hotel_bookings = json.loads(hotel_bookings_json)
+                        email_body += "\nHOTEL BOOKINGS:\n"
+                        for hotel in hotel_bookings.values():
+                            email_body += f"""
+                            Hotel Name: {hotel.get('name')}
+                            Check-in: {hotel.get('check_in')}
+                            Check-out: {hotel.get('check_out')}
+                            Price per Night: {hotel.get('price', 'N/A')}
+                            """
+                
+                email_body += f"""
+                
+                For any queries or assistance, please feel free to contact us.
+                
+                Best Regards,
+                BlingDestinations Team
+                """
+                
+                msg.attach(MIMEText(email_body, 'plain'))
+                print("Email body: ", email_body)
+                # Send email
+                with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                    server.starttls()
+                    server.login(sender_email, sender_password)
+                    server.send_message(msg)
+                
+            except Exception as e:
+                print(f"Error sending confirmation email: {str(e)}")
+                # Continue with database operations even if email fails
+        
+        conn.commit()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        print(f"Error in database operation: {str(e)}")
+        return False
 
 #########################################################
 prompt1 = ChatPromptTemplate.from_messages(
@@ -415,11 +492,12 @@ class WriteToDatabaseParams(BaseModel):
     Origin_city: str = Field(..., description="Origin city of the trip")
     Tot_adults: int = Field(..., description="Number of adults in the trip")
     Tot_children: Optional[int] = Field(None, description="Number of children in the trip")
+    Tot_cost: str = Field(..., description="Total cost of the trip")
     Hotel_bookings: Optional[str] = Field(None, description="Details of the hotel bookings (Hotel name, check in date, check out date)")
 
 #Initiating LLM Model
 
-model = ChatOpenAI(model = 'gpt-4o-mini')
+model = ChatOpenAI(model = 'gpt-4o-mini', temperature=0.1)
 
 class State(MessagesState):    # First define State
     trip_details: Optional[Dict] = None

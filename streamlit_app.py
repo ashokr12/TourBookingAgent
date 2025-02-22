@@ -69,7 +69,7 @@ st.markdown("""
 }
 .carousel-image {
     width: 100%;
-    height: 200px;
+    height: 300px;  /* Increased from 200px to 300px */
     object-fit: cover;
     border-radius: 10px;
 }
@@ -160,15 +160,14 @@ def create_image_carousel():
         "assets/Mauritius.jpg",
         "assets/SouthAfrica.jpg",
         "assets/Thailand.jpg",
-
     ]
     
     # Initialize carousel index in session state
     if "carousel_index" not in st.session_state:
         st.session_state.carousel_index = 0
     
-    # Create columns for the carousel
-    col1, col2, col3, col4, col5 = st.columns([1, 3, 3, 3, 1])
+    # Create columns for the carousel with adjusted ratios
+    col1, col2, col3, col4, col5 = st.columns([0.5, 3.5, 3.5, 3.5, 0.5])  # Modified column ratios
     
     with col1:
         if st.button("←"):
